@@ -198,7 +198,11 @@ def enrich_locations(ips: set[str]) -> dict[str, str]:
     _get_searcher()
     entries: dict[str, str] = {}
     for ip in ips:
-        entries[f'{ip}:{PORT}'] = lookup_country(ip)
+        code = lookup_country(ip)
+        flag = country_to_flag(code)
+        # 优先显示国旗，如果转换失败则显示国家代码
+        display = flag if flag else code
+        entries[f'{ip}:{PORT}'] = display
     return entries
 
 
