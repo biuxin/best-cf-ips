@@ -26,16 +26,12 @@ if TYPE_CHECKING:
 
 
 SOURCES: dict[str, str] = {
-    'https://www.wetest.vip/page/cloudfront/address_v4.html': 'WeTest',
-    'https://api.uouin.com/cloudflare.html': 'UOUIN',
-    'https://bestcf.pages.dev/xinyitang3/ipv4.txt': 'Mia',
-    'https://bestcf.pages.dev/tiancheng/all.txt': 'Tiancheng',
+    'https://ip.v2too.top/api/nodes': 'You-JP',
+    'https://bestcf.pages.dev/tiancheng/hk.txt': 'Tiancheng-HK',
+    'https://bestcf.pages.dev/s5gy/hk.txt': 'S5-HK',
     'https://raw.githubusercontent.com/gslege/CloudflareIP/refs/heads/main/SG.txt': 'Gslege-SG',
-    'https://raw.githubusercontent.com/gslege/CloudflareIP/refs/heads/main/DE.txt': 'Gslege-DE',
     'https://raw.githubusercontent.com/gslege/CloudflareIP/refs/heads/main/US.txt': 'Gslege-US',
     'https://raw.githubusercontent.com/ymyuuu/IPDB/refs/heads/main/BestCF/bestcfv4.txt': 'IPDB',
-    'https://vps789.com/openApi/cfIpApi': 'VPS789',
-    'https://api.4ce.cn/api/bestCFIP': 'vvhan',
     'https://ip.164746.xyz': 'https://ip.164746.xyz/',
 }
 
@@ -134,11 +130,6 @@ def lookup_country(ip: str) -> str:
     return 'XX'
 
 
-def beijing_timestamp() -> str:
-    """Return current Beijing time as YYYY-MM-DD HH:MM string."""
-    return (datetime.now(timezone.utc) + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M')
-
-
 _browser = None
 _pw = None
 
@@ -198,11 +189,7 @@ def enrich_locations(ips: set[str]) -> dict[str, str]:
     _get_searcher()
     entries: dict[str, str] = {}
     for ip in ips:
-        code = lookup_country(ip)
-        flag = country_to_flag(code)
-        # 优先显示国旗，如果转换失败则显示国家代码
-        display = flag if flag else code
-        entries[f'{ip}:{PORT}'] = display
+        entries[f'{ip}:{PORT}'] = lookup_country(ip)
     return entries
 
 
@@ -224,7 +211,7 @@ def main() -> int:
     tmp = OUTPUT_FILE.with_suffix('.tmp')
     with tmp.open('w', encoding='utf-8') as f:
         for ip_port, location in entries.items():
-            f.write(f'{ip_port}#{location}\n')
+            f.write(f'{ip_port}#{location} {country_to_flag(location)}\n')
     tmp.replace(OUTPUT_FILE)
     print(f'\n{len(entries)} IPs written to {OUTPUT_FILE}')
     return 0
