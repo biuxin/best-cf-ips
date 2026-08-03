@@ -218,9 +218,7 @@ def main() -> int:
     entries = enrich_locations(all_ips)
 
     tmp = OUTPUT_FILE.with_suffix('.tmp')
-    timestamp = beijing_timestamp()
     with tmp.open('w', encoding='utf-8') as f:
-        f.write(f'#{len(entries)} bestips updated at {timestamp}\n')
         for ip_port, location in entries.items():
             f.write(f'{ip_port}#{location}\n')
     tmp.replace(OUTPUT_FILE)
