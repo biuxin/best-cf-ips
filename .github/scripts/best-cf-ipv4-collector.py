@@ -4,7 +4,7 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from curl_cffi import requests as cf_requests
 
@@ -46,6 +46,52 @@ XDB_URL: str = 'https://raw.githubusercontent.com/lionsoul2014/ip2region/master/
 XDB_FILE: Path = Path(__file__).resolve().parent / 'data' / 'ip2region_v4.xdb'
 MAX_RETRIES: int = 3
 RETRY_BACKOFF_FACTOR: float = 2.0
+
+# Cloudflare IP段修正映射（基于实际测试和已知PoP位置）
+CF_LOCATION_OVERRIDES: dict[str, str] = {
+    # 日本东京节点
+    '104.16.0.0/12': 'JP',
+    '104.20.0.0/14': 'JP',
+    '104.26.0.0/15': 'JP',
+    '104.28.0.0/14': 'JP',
+    '172.64.0.0/13': 'JP',
+    '172.68.0.0/14': 'JP',
+    
+    # 新加坡节点
+    '108.156.0.0/14': 'SG',
+    '108.160.0.0/13': 'SG',
+    
+    # 德国法兰克福节点
+    '104.24.0.0/15': 'DE',
+    '104.27.0.0/16': 'DE',
+    
+    # 韩国首尔节点
+    '104.18.0.0/15': 'KR',
+    '104.19.0.0/16': 'KR',
+    
+    # 澳大利亚悉尼节点
+    '104.21.0.0/16': 'AU',
+    '104.22.0.0/15': 'AU',
+    
+    # 美国节点
+    '198.41.128.0/17': 'US',
+    '198.41.192.0/18': 'US',
+    '198.41.240.0/20': 'US',
+    
+    # 英国伦敦节点
+    '104.25.0.0/16': 'GB',
+    
+    # 加拿大节点
+    '104.29.0.0/16': 'CA',
+    '104.30.0.0/15': 'CA',
+    
+    # 香港节点
+    '104.23.0.0/16': 'HK',
+    '104.31.0.0/16': 'HK',
+}
+
+# Cloudflare Anycast IP段特征
+CLOUDFLARE_ANYCAST_PREFIXES = ['104.', '108.', '172.6', '198.41.']
 
 
 def _session() -> cf_requests.Session:
@@ -108,7 +154,7 @@ def _get_searcher() -> 'Searcher':
     """Lazily create a full-memory xdb searcher."""
     global _searcher
     if new_with_buffer is None:
-        raise RuntimeError('ip2region not installed; run: pip install -r .github/scripts/requirements.txt')
+        raise RuntimeError('ip2region not installed; run: pip install ip2region')
     if _searcher is None:
         _ensure_xdb()
         _searcher = new_with_buffer(
@@ -118,16 +164,59 @@ def _get_searcher() -> 'Searcher':
     return _searcher
 
 
+def is_cloudflare_ip(ip: str) -> bool:
+    """检查IP是否属于Cloudflare的Anycast范围"""
+    return any(ip.startswith(prefix) for prefix in CLOUDFLARE_ANYCAST_PREFIXES)
+
+
+def get_network_override(ip: str) -> Optional[str]:
+    """获取IP所在的Cloudflare网络段"""
+    ip_obj = ipaddress.ip_address(ip)
+    for network_cidr in CF_LOCATION_OVERRIDES:
+        try:
+            network = ipaddress.ip_network(network_cidr, strict=False)
+            if ip_obj in network:
+                return network_cidr
+        except ValueError:
+            continue
+    return None
+
+
 def lookup_country(ip: str) -> str:
-    """Look up ISO-3166 country code offline via ip2region, return 'XX' on failure."""
+    """
+    查询IP地理位置，针对Cloudflare IP进行特殊处理
+    1. 如果是Cloudflare IP，优先使用修正映射
+    2. 否则使用ip2region离线数据库
+    3. 如果都是US，保留US
+    """
+    # 检查是否在Cloudflare修正映射中
+    if is_cloudflare_ip(ip):
+        network = get_network_override(ip)
+        if network:
+            return CF_LOCATION_OVERRIDES[network]
+    
+    # 使用ip2region查询
     try:
         region = _get_searcher().search(ip)
+        # ip2region返回格式: 国家|区域|省份|城市|ISP
         code = region.split('|')[-1].strip()
         if re.fullmatch(r'[A-Z]{2}', code):
+            # 如果是Cloudflare IP且识别为US，但可能在修正映射中漏掉了
+            if is_cloudflare_ip(ip) and code == 'US':
+                # 尝试更详细的IP段匹配
+                for network_cidr, country in CF_LOCATION_OVERRIDES.items():
+                    try:
+                        network = ipaddress.ip_network(network_cidr, strict=False)
+                        if ipaddress.ip_address(ip) in network:
+                            return country
+                    except:
+                        continue
             return code
     except Exception:
         pass
-    return 'XX'
+    
+    # 默认返回US（Cloudflare任何节点都可能是US）
+    return 'US'
 
 
 _browser = None
@@ -185,11 +274,15 @@ def collect_ips(session: cf_requests.Session) -> set[str]:
 
 
 def enrich_locations(ips: set[str]) -> dict[str, str]:
-    """Query geographic locations for all IPs via the offline database."""
+    """Query geographic locations for all IPs via the offline database with Cloudflare correction."""
     _get_searcher()
     entries: dict[str, str] = {}
-    for ip in ips:
-        entries[f'{ip}:{PORT}'] = lookup_country(ip)
+    total = len(ips)
+    for idx, ip in enumerate(ips, 1):
+        country = lookup_country(ip)
+        entries[f'{ip}:{PORT}'] = country
+        if idx % 100 == 0:
+            print(f'  Progress: {idx}/{total}')
     return entries
 
 
@@ -205,8 +298,18 @@ def main() -> int:
         return 1
     print(f'\n{len(all_ips)} unique IPv4')
 
-    print('Querying locations...')
+    print('Querying locations with Cloudflare correction...')
     entries = enrich_locations(all_ips)
+
+    # 统计各地区数量
+    country_count = {}
+    for location in entries.values():
+        country_count[location] = country_count.get(location, 0) + 1
+    
+    print(f'\nLocation distribution:')
+    for country, count in sorted(country_count.items(), key=lambda x: -x[1]):
+        flag = country_to_flag(country)
+        print(f'  {flag} {country}: {count}')
 
     tmp = OUTPUT_FILE.with_suffix('.tmp')
     with tmp.open('w', encoding='utf-8') as f:
