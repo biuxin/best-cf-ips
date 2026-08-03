@@ -222,7 +222,7 @@ def main() -> int:
     with tmp.open('w', encoding='utf-8') as f:
         f.write(f'#{len(entries)} bestips updated at {timestamp}\n')
         for ip_port, location in entries.items():
-            f.write(f'{ip_port}#{location} {country_to_flag(location)}\n')
+            f.write(f'{ip_port}#{location}\n')
     tmp.replace(OUTPUT_FILE)
     print(f'\n{len(entries)} IPs written to {OUTPUT_FILE}')
     return 0
